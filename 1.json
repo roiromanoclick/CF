@@ -1,0 +1,163 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Builds VPC w/ Internet Gateways, NAT Gateway, public and private subnets and associated route tables.",
+  "Parameters": {
+    "DHCPDomainName" : {
+	  "Description" : "Domain name for the DHCP options set",
+	  "Type" : "String"
+	},
+	"VPCName": {
+	  "Description" : "Name for the VPC",
+	  "Type": "String"
+	},
+	"DNSSupport": {
+	  "Description" : "Enable DNS Support?",
+	  "Type" : "String",
+	  "AllowedValues" : ["true","false"],
+	  "Default" : "true"
+	},
+	"DNSHostnames": {
+	  "Description" : "Enable DNS Hostnames?",
+	  "Type" : "String",
+	  "AllowedValues" : ["true","false"],
+	  "Default" : "true"
+	}
+  },
+  "Resources": {
+    "VPC": {
+      "Type": "AWS::EC2::VPC",
+	  "DependsOn": "DHCPOptionsSet",
+      "Properties": {
+        "CidrBlock": "10.170.0.0/16",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": { "Ref" : "VPCName" }
+          }
+        ],
+		"EnableDnsSupport": { "Ref" : "DNSSupport" },
+		"EnableDnsHostnames": { "Ref" : "DNSHostnames" }
+      }
+    },
+	"NATGateway": {
+	  "Type" : "AWS::EC2::NatGateway",
+	  "Properties" : {
+		"AllocationId" : { "Fn::GetAtt" : ["EIP", "AllocationId"]},
+		"SubnetId" : { "Ref" : "NoNATSubnet" }
+	  }
+	},
+	"DHCPOptionsSet" : { 
+      "Type" : "AWS::EC2::DHCPOptions",
+      "Properties" : {
+        "DomainName" : { "Ref" : "DHCPDomainName" },
+        "DomainNameServers" : [ "10.170.0.100, 10.170.1.100" ],
+        "Tags" : [{ "Key" : "Name", "Value" : { "Ref" : "DHCPDomainName" } }]
+      }
+	},
+	"DHCPOptionsSetAssoc" : { 
+	  "DependsOn" : "DHCPOptionsSet",
+      "Type" : "AWS::EC2::VPCDHCPOptionsAssociation",
+      "Properties" : {
+        "DhcpOptionsId" : { "Ref" : "DHCPOptionsSet" },
+        "VpcId" : { "Ref" : "VPC" }
+      }
+	},
+	"EIP" : {
+	  "Type" : "AWS::EC2::EIP",
+	  "Properties" : {
+		"Domain" : "vpc"
+	  }
+	},
+    "InternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [{ "Key": "Name", "Value": "Management IGW" }]
+      }
+    },
+    "AttachInternetGateway": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "InternetGatewayId": { "Ref": "InternetGateway" }
+      }
+    },
+    "PublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": { 
+	    "VpcId": { "Ref": "VPC" },
+        "Tags": [{ "Key": "Name", "Value": "Main PR01" }]
+      }
+    },
+    "PublicRoute": {
+	  "DependsOn": "AttachInternetGateway",
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": { "Ref": "PublicRouteTable" },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": { "Ref": "InternetGateway" }
+      }
+    },
+    "PrivateRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "Tags": [{ "Key": "Name", "Value": "Private" }]
+      }
+    },
+    "PrivateRoute": {
+	  "DependsOn": "NATGateway",
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": { "Ref": "PrivateRouteTable" },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NatGatewayId": { "Ref": "NATGateway" }
+      }
+    },
+    "PublicSubnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": { "Ref" : "VPC" },
+        "CidrBlock": "10.170.0.0/25",
+        "AvailabilityZone": { "Fn::Select": [ "1", { "Fn::GetAZs": { "Ref": "AWS::Region" }}]},
+        "Tags": [{ "Key": "Name", "Value": "MNG Internal - 1A" }]
+      }
+    },
+    "NoNATSubnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": { "Ref" : "VPC" },
+        "CidrBlock": "10.170.14.0/28",
+        "AvailabilityZone": { "Fn::Select": [ "2", { "Fn::GetAZs": { "Ref": "AWS::Region" }}]},
+        "Tags": [{ "Key": "Name", "Value": "NO NAT" }]
+      }
+    },
+    "NoNATRouteTableAssoc": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": { "Ref": "NoNATSubnet" },
+        "RouteTableId": { "Ref" : "PublicRouteTable" }
+      }
+    },
+	"PublicSubnet1RouteTableAssoc": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": { "Ref": "PublicSubnet1" },
+        "RouteTableId": { "Ref" : "PublicRouteTable" }
+      }
+    }
+  },
+  "Outputs": {
+    "VpcId": {
+      "Value": { "Ref": "VPC" },
+      "Description": "VPC ID of newly created VPC"
+    },
+	"PublicRouteTableId" : {
+	  "Value" : { "Ref" : "PublicRouteTable" },
+	  "Description" : "Public Route Table ID"
+	},
+	"PrivateRouteTableId" : {
+	  "Value" : { "Ref" : "PrivateRouteTable" },
+	  "Description" : "Private Route Table ID"
+	}
+  }
+}
